@@ -3,15 +3,16 @@ import torchvision.transforms.functional as F
 from torchvision import transforms, utils
 import pandas as pd
 import torch
+import numpy as np 
 
 class TS_Data(Dataset):
     def __init__(self,fname, inpt, out):
-        relevant_cols = ['SCC_Follow_Info_6','SCC_Follow_Info_7','SCC_Follow_Info_8', 'VDS_Chassis_CG_Position_0','VDS_Chassis_CG_Position_1', 'VDS_Chassis_CG_Position_2']
+        relevant_cols = ['SCC_Follow_Info_6','SCC_Follow_Info_7', 'VDS_Chassis_CG_Position_0','VDS_Chassis_CG_Position_1']
         df = pd.read_csv(fname)
         self.obs_len = inpt
         self.pred_len = out
-        dat_cols = ['SCC_Follow_Info_6','SCC_Follow_Info_7','SCC_Follow_Info_8']
-        target_cols = [ 'VDS_Chassis_CG_Position_0','VDS_Chassis_CG_Position_1', 'VDS_Chassis_CG_Position_2']
+        dat_cols = ['SCC_Follow_Info_6','SCC_Follow_Info_7']
+        target_cols = [ 'VDS_Chassis_CG_Position_0','VDS_Chassis_CG_Position_1']
         #do relative positioning for all of these 
         data_df = df[dat_cols]
         target_df = df[target_cols]
@@ -32,3 +33,5 @@ class TS_Data(Dataset):
     
     def __len__(self):
         return self.t_df.shape[0]-(self.obs_len+self.pred_len)-1 #modify to prevent out of bounds
+    
+    

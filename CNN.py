@@ -32,19 +32,22 @@ class CNN(nn.Module):
         #so if padding is 0, make kernel_size 1, if kernel_size is 2, makke padding 1
         #with padding 2, output shape iwll be (batch_size, c_out- 40, 4)
         #making large padding to increase dimensionality of last dimension. Want it to go from 2 to 5 in the end result
+        nn.BatchNorm1d(40, affine = False),
         nn.ReLU(inplace = True), 
         nn.MaxPool1d(kernel_size = 4, padding = 1, dilation = 1, stride = 1), #current shape is now (batch_size, 40, 3)
         nn.Conv1d(in_channels=40, out_channels = 60, kernel_size = 6, padding = 4), #shape is now (batch_size, 60, 6)
-        nn.ReLU(inplace=True),
+        nn.BatchNorm1d(60, affine = False),
+        nn.Tanh(),
         nn.MaxPool1d(kernel_size = 6, padding = 3, stride = 2,dilation=1), #shape is not (batch_size, 60, 4)        
         )
         
         self.regress = nn.Sequential(
         nn.Linear(in_features = 240, out_features =180),
+        nn.BatchNorm1d(180, affine = False),
         nn.ReLU(inplace =True),
-        nn.Dropout(), 
         nn.Linear(in_features = 180, out_features = 120),
-        nn.ReLU(inplace = True),
+        nn.BatchNorm1d(120, affine = False),
+        nn.Tanh(),
         nn.Linear(in_features = 120, out_features = pred_len*5)) #will return 40 features for assume pred_len < 24
         
 
@@ -55,4 +58,5 @@ class CNN(nn.Module):
         #flatten it to remove bugs
         x = torch.flatten(x,1) #remove all except the batch size 
         x = self.regress(x)
-        return x.view(-1,self.pred_len,5)
+        x = x.view(-1,self.pred_len,5)
+        return x

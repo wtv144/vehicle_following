@@ -6,8 +6,6 @@ from torch.serialization import load
 from ts_data import TS_Data
 import torch
 from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms.functional as F
-from torchvision import transforms, utils
 from CNN import CNN
 from metrics import nll 
 import argparse 
@@ -16,15 +14,19 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 parser = argparse.ArgumentParser()
 #data parameters
+
 parser.add_argument('--obs_seq_len', type=int, default=8)
 parser.add_argument('--pred_seq_len', type=int, default=12)
 parser.add_argument('--data_dir', default="/home/warren/Documents/UGRA/AIM/csv_files")  
 #training parameters
 parser.add_argument('--lr', type=float, default=0.01,help='learning rate')
-parser.add_argument('--model-type', default= 'CNN', help = 'CNN, LSTM, GCNN' )
-parser.add_argument('--load_model', type = bool, action = 'store_true')
+parser.add_argument('--model_type', default= 'CNN', help = 'CNN, LSTM, GCNN' )
+parser.add_argument('--load_model',  action = 'store_true')
 parser.add_argument('--tag', default='tag',help='personal tag for the model ')
 parser.add_argument('--num_epochs', type=int, default=250, help='number of epochs')  
+parser.add_argument('--single_set', action = 'store_true')
+parser.add_argument('--clip_grad', type=float, default=None,
+                    help='gadient clipping') 
 args = parser.parse_args()
 
 obs_seq_len = args.obs_seq_len
@@ -38,14 +40,23 @@ def get_dataset(fdir, in_len,pred_len):
     dataset =  torch.utils.data.ConcatDataset(datasets)
     return dataset
 fdir = args.data_dir
-full_dataset = get_dataset(fdir,obs_seq_len, pred_seq_len)
-train_len = int(.8* len(full_dataset))
-test_len = len(full_dataset)-train_len
-train_data, test_data = torch.utils.data.random_split(full_dataset, [train_len, test_len])
-train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True)
-test_dataloader = DataLoader(test_data, batch_size=64)
-checkpoint_dir = './checkpoint/'+args.tag+'/'
-checkpoint_f = checkpoint_dir + 'model.pt'
+train_dataloader = None
+test_dataloader = None
+if args.single_set:
+    full_dataset = get_dataset(fdir,obs_seq_len, pred_seq_len)
+    train_len = int(.8* len(full_dataset))
+    test_len = len(full_dataset)-train_len
+    train_data, test_data = torch.utils.data.random_split(full_dataset, [train_len, test_len])
+    train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True)
+    test_dataloader = DataLoader(test_data, batch_size=64)
+else:
+    data_dir = args.data_dir
+    train_set = get_dataset(os.path.join(data_dir, "train"), obs_seq_len,pred_seq_len)
+    test_set = get_dataset(os.path.join(data_dir, "valid"), obs_seq_len, pred_seq_len)
+    train_dataloader = DataLoader(train_set, batch_size=64, shuffle=True )
+    test_dataloader = DataLoader(test_set, batch_size=64, shuffle=False)
+checkpoint_dir =  os.path.join(os.getcwd(), './checkpoint/'+args.tag+'/')
+checkpoint_f = os.path.join(checkpoint_dir, 'model.pt')
 training_losses = []
 valid_fde = []
 valid_ade = []
@@ -55,10 +66,18 @@ if not os.path.exists(checkpoint_dir):
 epoch = 0
 epochs = args.num_epochs
 #define model 
+if args.model_type == "CNN":
+    print("making CNN")
+    model = CNN(obs_seq_len,pred_seq_len).to(device)
+elif args.model_type == "LSTM":
+    print("making lstm")
 
-model = CNN(obs_seq_len,pred_seq_len).to(device)
+else:
+    print("making GCNN")
 criterion = nll()
 optimizer = torch.optim.Adam(model.parameters(), lr = args.lr)
+
+
 #helper methods 
 
 
@@ -83,7 +102,7 @@ def store_model(epoch):
             'optimizer_state_dict': optimizer.state_dict(),
             }, checkpoint_f)
 def load_model():
-    global model, epoch, optimizer
+    global epoch, model, optimzier
     checkpoint = torch.load(checkpoint_f)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.laod_state_dict(checkpoint['optimizer_state_dict'])
@@ -91,15 +110,20 @@ def load_model():
 
     model.train() #resume training 
 def load_losses(fdir):
-    
+    global training_losses, valid_ade, valid_fde
+    with open(os.path.join(checkpoint_dir,"trainloss.pkl"), 'rb') as f:
+        training_losses = pickle.load(f)
+    with open(os.path.join(checkpoint_dir ,"valid_ade.pkl"),'rb') as f:
+        valid_ade = pickle.load(f)
+    with open(os.path.join(checkpoint_dir ,"valid_fde.pkl"), 'rb') as f:
+        valid_fde =  pickle.load(f)   
 def store_losses():
-    with open( checkpoint_dir +"trainloss.pkl",'wb') as f:
+    with open(os.path.join(checkpoint_dir,"trainloss.pkl"),'wb') as f:
         pickle.dump(training_losses, f)
-    with open(checkpoint_dir +"valid_ade",'wb') as f:
+    with open(os.path.join(checkpoint_dir ,"valid_ade.pkl")) as f:
         pickle.dump(valid_ade,f)
-    with open(checkpoint_dir +"valid_fde", 'wb') as f:
-        pickle.dump(*valid_fde,f)
-
+    with open(os.path.join(checkpoint_dir ,"valid_fde.pkl"), 'wb') as f:
+        pickle.dump(valid_fde,f)
 
 
 
@@ -107,7 +131,11 @@ def store_losses():
 
 
 if args.load_model:
+    print("loading model... \n")
     load_model()
+    load_losses()
+else:
+    print("not loading model \n")
 
 #start training loop
 def train():
@@ -120,6 +148,7 @@ def train():
         preds = model(inputs)
         loss  = criterion(preds, labels)
         loss.backward()
+        #clip gradient here
         optimizer.step()
         train_loss +=loss.item()
     train_batch_loss = train_loss/len(train_dataloader)
@@ -141,9 +170,9 @@ def valid():
                 #iterate over curr
                 num_samples = 20
                 num_steps = curr.shape[0]
-                sample_list = []*num_steps
+                sample_list = []
                 for i in range(num_steps):
-                    sample_list[i] = pred_to_samples(num_samples, curr[i])
+                    sample_list.append(pred_to_samples(num_samples, curr[i]))
                     #now should have a list of samples for each step
 
                 samples = torch.stack(samples,dim=1) #stack it along middle dim to get [num_samples, num_steps, (x,y)]
