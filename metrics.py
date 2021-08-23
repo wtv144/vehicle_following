@@ -33,7 +33,6 @@ class nll(nn.Module):
 
         result = -torch.log(torch.clamp(result, min=epsilon))
         result = torch.mean(result)
-        print(result)
         return result 
 #Uses descriptions from here: http://ai.stanford.edu/blog/trajectory-forecasting/ 
     

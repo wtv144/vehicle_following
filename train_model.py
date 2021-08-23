@@ -16,7 +16,7 @@ parser = argparse.ArgumentParser()
 #data parameters
 
 parser.add_argument('--obs_seq_len', type=int, default=8)
-parser.add_argument('--pred_seq_len', type=int, default=12)
+parser.add_argument('--pred_seq_len', type=int, default=4)
 parser.add_argument('--data_dir', default="/home/warren/Documents/UGRA/AIM/csv_files")  
 #training parameters
 parser.add_argument('--lr', type=float, default=0.01,help='learning rate')
@@ -26,9 +26,12 @@ parser.add_argument('--tag', default='tag',help='personal tag for the model ')
 parser.add_argument('--num_epochs', type=int, default=250, help='number of epochs')  
 parser.add_argument('--single_set', action = 'store_true')
 parser.add_argument('--clip_grad', type=float, default=None,
-                    help='gadient clipping') 
+                    help='gradient clipping') 
+parser.add_argument('--batch_size',type = int, default = 64 )                    
 args = parser.parse_args()
 
+#testing scripts
+#python3 train_model.py --lr 0.01 --tag test --num_epochs 1 --clip_grad 0.001 --data_dir /home/warren/Documents/UGRA/AIM/csv_files2
 obs_seq_len = args.obs_seq_len
 pred_seq_len = args.pred_seq_len
 def get_dataset(fdir, in_len,pred_len):
@@ -42,19 +45,20 @@ def get_dataset(fdir, in_len,pred_len):
 fdir = args.data_dir
 train_dataloader = None
 test_dataloader = None
+batch_size = args.batch_size
 if args.single_set:
     full_dataset = get_dataset(fdir,obs_seq_len, pred_seq_len)
     train_len = int(.8* len(full_dataset))
     test_len = len(full_dataset)-train_len
     train_data, test_data = torch.utils.data.random_split(full_dataset, [train_len, test_len])
-    train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True)
-    test_dataloader = DataLoader(test_data, batch_size=64)
+    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    test_dataloader = DataLoader(test_data, batch_size=batch_size)
 else:
     data_dir = args.data_dir
     train_set = get_dataset(os.path.join(data_dir, "train"), obs_seq_len,pred_seq_len)
     test_set = get_dataset(os.path.join(data_dir, "valid"), obs_seq_len, pred_seq_len)
-    train_dataloader = DataLoader(train_set, batch_size=64, shuffle=True )
-    test_dataloader = DataLoader(test_set, batch_size=64, shuffle=False)
+    train_dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True )
+    test_dataloader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
 checkpoint_dir =  os.path.join(os.getcwd(), './checkpoint/'+args.tag+'/')
 checkpoint_f = os.path.join(checkpoint_dir, 'model.pt')
 training_losses = []
@@ -70,9 +74,11 @@ if args.model_type == "CNN":
     print("making CNN")
     model = CNN(obs_seq_len,pred_seq_len).to(device)
 elif args.model_type == "LSTM":
-    print("making lstm")
+    #TODO 
+    print("making LSTM")
 
 else:
+    #TODO
     print("making GCNN")
 criterion = nll()
 optimizer = torch.optim.Adam(model.parameters(), lr = args.lr)
@@ -102,14 +108,15 @@ def store_model(epoch):
             'optimizer_state_dict': optimizer.state_dict(),
             }, checkpoint_f)
 def load_model():
-    global epoch, model, optimzier
+    global epoch, model, optimizer
     checkpoint = torch.load(checkpoint_f)
     model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.laod_state_dict(checkpoint['optimizer_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     epoch = checkpoint['epoch']
+    print("model loaded")
 
     model.train() #resume training 
-def load_losses(fdir):
+def load_losses():
     global training_losses, valid_ade, valid_fde
     with open(os.path.join(checkpoint_dir,"trainloss.pkl"), 'rb') as f:
         training_losses = pickle.load(f)
@@ -120,7 +127,7 @@ def load_losses(fdir):
 def store_losses():
     with open(os.path.join(checkpoint_dir,"trainloss.pkl"),'wb') as f:
         pickle.dump(training_losses, f)
-    with open(os.path.join(checkpoint_dir ,"valid_ade.pkl")) as f:
+    with open(os.path.join(checkpoint_dir ,"valid_ade.pkl"), 'wb') as f:
         pickle.dump(valid_ade,f)
     with open(os.path.join(checkpoint_dir ,"valid_fde.pkl"), 'wb') as f:
         pickle.dump(valid_fde,f)
@@ -139,6 +146,7 @@ else:
 
 #start training loop
 def train():
+    print("training")
     model.train()
     train_loss = 0
     for idx, (inputs, labels) in enumerate(train_dataloader):
@@ -149,11 +157,14 @@ def train():
         loss  = criterion(preds, labels)
         loss.backward()
         #clip gradient here
+        if args.clip_grad is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(),args.clip_grad)
         optimizer.step()
         train_loss +=loss.item()
     train_batch_loss = train_loss/len(train_dataloader)
     training_losses.append(train_batch_loss)
 def valid():
+    print("validation")
     model.eval()
     with torch.no_grad():
         batch_sum_ade = 0
@@ -171,20 +182,23 @@ def valid():
                 num_samples = 20
                 num_steps = curr.shape[0]
                 sample_list = []
+                print(curr)
                 for i in range(num_steps):
                     sample_list.append(pred_to_samples(num_samples, curr[i]))
                     #now should have a list of samples for each step
 
-                samples = torch.stack(samples,dim=1) #stack it along middle dim to get [num_samples, num_steps, (x,y)]
+                samples = torch.stack(sample_list,dim=1) #stack it along middle dim to get [num_samples, num_steps, (x,y)]
                 #now cumsum it 
                 abs_samples = samples.cumsum(dim=1) #dim =1 since it is the number of steps shape is [num_samples, steps, rel pos]
                 # now take the minimum ade/fde of the absolute samples to it 
                 fde_dists = []
                 ade_dists = []
+                temp_label = labels[b,:,:]
+                temp_label = temp_label.cumsum(dim=0)
                 for i in range(num_samples):
                     #calculate the metrics for each
-                    fde_dists.append(fde_dist(abs_samples[i]))
-                    ade_dists.append(ade_dist(abs_samples[i]))
+                    fde_dists.append(fde_dist(abs_samples[i],temp_label))
+                    ade_dists.append(ade_dist(abs_samples[i],temp_label))
                 #now take the min
                 min_fde = min(fde_dists)
                 min_ade = min(ade_dists)
@@ -197,9 +211,9 @@ def valid():
         valid_ade.append(batch_sum_ade)
         valid_fde.append(batch_sum_fde)
 
+
 for e in range(epoch,epochs):
     train()
     valid()
     store_model(e)
     store_losses()
-
